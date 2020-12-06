@@ -1,1 +1,1 @@
-# custom-frequency-setting-to-cctv-camera-live-feed-with-ope-cv
+# custom-frequency-setting-to-cctv-camera-live-feed-with-open-cv
