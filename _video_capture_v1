@@ -1,0 +1,139 @@
+#capture camera details using a url
+import json
+import requests
+import cv2
+import time
+import base64
+import threading
+from time import sleep
+import binascii
+import numpy as np
+from datetime import datetime
+from configparser import ConfigParser
+import sys
+from CustomVideoStream import VideoStream
+#############Fetching the token for authentication##########################
+config = ConfigParser()
+config.read('config.ini')
+_pid = config.get('VA_Site', 'Project_Id')
+_uName = config.get('VA_Site', 'UserName')
+_pwd = config.get('VA_Site', 'Password')
+#print(_uName,_pwd)
+token_headers={'Content-type':'application/json', 'Accept':'application/json'}
+token_parameters = '''{
+    "UserName":"'''+_uName +'''",
+    "Password":"'''+_pwd +'''"
+}'''
+try:
+    response = requests.post("http://app.net/UserToken",headers=token_headers, data=token_parameters)
+    token_data = json.loads(response.text)
+    resp_Token_Data = token_data['data'].copy()
+    _token = resp_Token_Data['UserAccessToken']
+    print(_token)
+except Exception as e:
+    print("Failed while fetching the token")
+#print(resp_Token_Data['UserAccessToken'])
+###########Fetcing the camera details#############################
+while True:
+    headers={'Content-type':'application/json', 'Accept':'application/json','Authorization':_token}
+    parameters = '''{"ProjectCode":"'''+_pid +'''"}'''
+    try:
+        print("Trying to fetch the Camera Details")
+        response = requests.post("http://1.1.1.1:1111/CCTVCameraConfigurationDetails",headers=headers, data=parameters)
+        json_data = json.loads(response.text)
+        resp_Data = json_data['data'].copy()
+        break
+    except Exception as e:
+        print(e)
+
+
+
+class myThread(threading.Thread):
+    def __init__(self, _camobj,counter,_token_value):
+        threading.Thread.__init__(self)
+        self.threadID = counter
+        self._cam_obj = _camobj
+        self.token_value = _token_value
+        self.counter = _camobj['CameraNumber']
+    def run(self):
+        print("\nStarting " + self.name)
+        # Acquire lock to synchronize thread
+        #threadLock.acquire()
+        self._cpture_frames(self._cam_obj, self.counter)
+        # Release lock for the next thread
+        #threadLock.release()
+        print("Exiting " + self.name)
+
+#############creating a function to capture frame and call the api#########################
+    def _cpture_frames(self,cam_obj,threadName):
+        status_code=""
+        headers={'Content-type':'application/json', 'Accept':'application/json','Authorization':self.token_value}
+        _cam_object_copy = cam_obj.copy()
+        _cam_vid_feed= VideoStream(_cam_object_copy['CameraUrl'])
+        _cam_vid_feed.start()
+        _CameraStatus = 1 
+        while True:
+            ret,frame = _cam_vid_feed.read()
+            print(ret," Thread ",threadName,'URL',_cam_object_copy['CameraUrl'])
+            try:
+                if not frame is None:
+                    jpg_img = cv2.imencode('.png', frame)
+                    b64_string = binascii.b2a_base64(jpg_img[1]).decode('utf-8')
+                else:
+                    _CameraStatus = 0
+                    b64_string = "AA"
+                #b_64 = base64.b64encode(b64_string).decode("utf-8")
+            except TypeError as te:
+                _CameraStatus = 0
+                b64_string = "AA"
+            now = datetime.now()
+            dt_string = now.strftime("%Y-%m-%d %H:%M:%S")
+            parameters = '''{
+
+                "RequestDate" :  "'''+dt_string +'''",
+
+                "CameraNumber" : "'''+_cam_object_copy['CameraNumber'] +'''",
+
+                "ImageStream": "'''+b64_string+'''",
+                "CameraStatus":"'''+str(_CameraStatus)+'''"
+
+            }'''
+
+            try:
+                response = requests.post("http://app/VideoImageToAIProcessRequest",data=parameters,headers=headers)
+            except ConnectionError as e:
+                response.status_code=400
+            except Exception as e:
+                if response.status_code==404:
+                    response = requests.post("http://app/UserToken",headers=token_headers, data=token_parameters)
+                    token_data = json.loads(response.text)
+                    resp_Token_Data = token_data['data'].copy()
+                    self.token_value = resp_Token_Data['UserAccessToken']
+                else:
+                    print('Exception', e)
+            if response.status_code!=200:
+                print('Problem with send request ',status_code)
+                json_data = "Error with connection"
+            else:
+                json_data = json.loads(response.text)
+            print('URL',_cam_object_copy['CameraUrl'],' ',json_data,time.ctime())
+            sleep(int(_cam_object_copy['CameraFrequency']))
+            now = datetime.now()
+            #dt_string = now.strftime("%Y-%m-%d %H:%M:%S")
+            #print('URL',_cam_object_copy['CameraUrl'],' ',time.ctime())
+
+# Create new threads
+threads = []
+for i,j in enumerate(resp_Data):
+    a = myThread(j, i+1,_token)
+    threads.append(a)
+    a.start()
+    
+# Wait for all threads to complete
+for thread in threads:
+    try:
+        thread.join()
+    except e:
+        pass
+
+print("\nExiting the Program!!!")
